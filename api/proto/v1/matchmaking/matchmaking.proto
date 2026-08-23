@@ -12,6 +12,14 @@ service MatchmakingService {
   rpc PlayerLeftBattleground(PlayerLeftBattlegroundRequest) returns (PlayerLeftBattlegroundResponse);
   rpc PlayerJoinedBattleground(PlayerJoinedBattlegroundRequest) returns (PlayerJoinedBattlegroundResponse);
   rpc BattlegroundStatusChanged(BattlegroundStatusChangedRequest) returns (BattlegroundStatusChangedResponse);
+
+  // Dungeon finder. The queue is ephemeral and lives only in this process:
+  // every start gets a new instanceID, and a caller that sees it change
+  // replays JoinLFG with the original queuedAtUnixMilli. Joins are idempotent
+  // by requestID, so a replay never double-queues.
+  rpc JoinLFG(JoinLFGRequest) returns (JoinLFGResponse);
+  rpc LeaveLFG(LeaveLFGRequest) returns (LeaveLFGResponse);
+  rpc GetLFGStatus(GetLFGStatusRequest) returns (GetLFGStatusResponse);
 }
 
 enum PVPTeamID {
@@ -129,4 +137,83 @@ message BattlegroundStatusChangedRequest {
 
 message BattlegroundStatusChangedResponse {
   string api = 1;
+}
+
+enum LFGRole {
+  LFGRoleNone   = 0;
+  LFGRoleTank   = 1;
+  LFGRoleHealer = 2;
+  LFGRoleDamage = 4;
+}
+
+enum LFGQueueStatus {
+  LFGQueueStatusNone    = 0;
+  LFGQueueStatusQueued  = 1;
+  LFGQueueStatusGrouped = 2;
+}
+
+message LFGMember {
+  uint32 realmID = 1;
+  uint64 playerGUID = 2;
+  uint32 roles = 3;
+  uint32 level = 4;
+  uint32 classID = 5;
+  string name = 6;
+
+  // Authoritative output of the worldserver's own eligibility check: level,
+  // difficulty, expansion, attunement, gear, lockout, deserter and every other
+  // core rule. Matchmaking only ever intersects these sets -- it must never
+  // widen one, because it cannot see the rules that produced it.
+  repeated uint32 eligibleDungeonIDs = 7;
+}
+
+message JoinLFGRequest {
+  string api = 1;
+  string requestID = 2;
+  uint32 realmID = 3;
+  uint32 battlegroupID = 4;
+  uint64 leaderGUID = 5;
+  repeated LFGMember members = 6;
+  repeated uint32 selectedDungeonIDs = 7;
+  int64 queuedAtUnixMilli = 8;
+}
+
+message JoinLFGResponse {
+  string api = 1;
+  string instanceID = 2;
+  LFGQueueStatus status = 3;
+
+  // Set once the party has been formed. Unlike a Blizzard proposal this is a
+  // real cluster group id minted by the group service, so the shards can treat
+  // it exactly like any other group.
+  uint64 groupID = 4;
+  uint32 dungeonID = 5;
+  LFGRole assignedRole = 6;
+}
+
+message LeaveLFGRequest {
+  string api = 1;
+  uint32 realmID = 2;
+  uint64 playerGUID = 3;
+}
+
+message LeaveLFGResponse {
+  string api = 1;
+  string instanceID = 2;
+}
+
+message GetLFGStatusRequest {
+  string api = 1;
+  uint32 realmID = 2;
+  uint64 playerGUID = 3;
+}
+
+message GetLFGStatusResponse {
+  string api = 1;
+  string instanceID = 2;
+  LFGQueueStatus status = 3;
+  int64 queuedAtUnixMilli = 4;
+  uint64 groupID = 5;
+  uint32 dungeonID = 6;
+  LFGRole assignedRole = 7;
 }
