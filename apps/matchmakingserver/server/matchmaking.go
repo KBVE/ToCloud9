@@ -9,6 +9,7 @@ import (
 
 	matchmaking "github.com/walkline/ToCloud9/apps/matchmakingserver"
 	"github.com/walkline/ToCloud9/apps/matchmakingserver/battleground"
+	"github.com/walkline/ToCloud9/apps/matchmakingserver/lfg"
 	"github.com/walkline/ToCloud9/apps/matchmakingserver/repo"
 	"github.com/walkline/ToCloud9/apps/matchmakingserver/service"
 	"github.com/walkline/ToCloud9/gen/matchmaking/pb"
@@ -21,12 +22,14 @@ type MatchmakingServer struct {
 
 	bgService   service.BattleGroundService
 	grpcConnMgr conn.GameServerGRPCConnMgr
+	lfgService  *lfg.Service
 }
 
-func NewMatchmakingServer(bgService service.BattleGroundService, grpcConnMgr conn.GameServerGRPCConnMgr) pb.MatchmakingServiceServer {
+func NewMatchmakingServer(bgService service.BattleGroundService, grpcConnMgr conn.GameServerGRPCConnMgr, lfgService *lfg.Service) pb.MatchmakingServiceServer {
 	return &MatchmakingServer{
 		bgService:   bgService,
 		grpcConnMgr: grpcConnMgr,
+		lfgService:  lfgService,
 	}
 }
 
@@ -57,7 +60,7 @@ func (s *MatchmakingServer) RemovePlayerFromQueue(ctx context.Context, req *pb.R
 
 func (s *MatchmakingServer) BattlegroundQueueDataForPlayer(ctx context.Context, req *pb.BattlegroundQueueDataForPlayerRequest) (*pb.BattlegroundQueueDataForPlayerResponse, error) {
 	links := s.bgService.GetQueueOrBattlegroundLinkForPlayer(service.QueuesByRealmAndPlayerKey{
-		guid.PlayerUnwrapped{
+		PlayerUnwrapped: guid.PlayerUnwrapped{
 			RealmID: uint16(req.RealmID),
 			LowGUID: guid.LowType(req.PlayerGUID),
 		},

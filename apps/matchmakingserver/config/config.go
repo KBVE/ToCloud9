@@ -23,6 +23,10 @@ type Config struct {
 	// ServersRegistryServiceAddress is address of servers registry service
 	ServersRegistryServiceAddress string `yaml:"serversRegistryServiceAddress" env:"SERVERS_REGISTRY_SERVICE_ADDRESS" env-default:"localhost:8999"`
 
+	// GroupServiceAddress is address of the group service. LFG matches are
+	// turned into real groups there, so the id allocator stays cluster-wide.
+	GroupServiceAddress string `yaml:"groupServiceAddress" env:"GROUP_SERVICE_ADDRESS" env-default:"localhost:8998"`
+
 	// BattleGroups are unions of realms that can participate in PvP between each other (such as battlegrounds).
 	// If you don't want to have cross-realm - simply leave it empty.
 	// To create a BattleGroup simply set some id for battle group and specify realms ids, example:

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -19,10 +20,12 @@ import (
 
 	matchmaking "github.com/walkline/ToCloud9/apps/matchmakingserver"
 	"github.com/walkline/ToCloud9/apps/matchmakingserver/config"
+	"github.com/walkline/ToCloud9/apps/matchmakingserver/lfg"
 	"github.com/walkline/ToCloud9/apps/matchmakingserver/repo"
 	"github.com/walkline/ToCloud9/apps/matchmakingserver/server"
 	"github.com/walkline/ToCloud9/apps/matchmakingserver/service"
 	"github.com/walkline/ToCloud9/gen/matchmaking/pb"
+	pbGroup "github.com/walkline/ToCloud9/gen/group/pb"
 	pbServ "github.com/walkline/ToCloud9/gen/servers-registry/pb"
 	"github.com/walkline/ToCloud9/shared/events"
 	"github.com/walkline/ToCloud9/shared/gameserver/conn"
@@ -117,8 +120,13 @@ func main() {
 		log.Fatal().Err(err).Msg("can't listen for incoming connections")
 	}
 
+	// A fresh instance id every start is the signal callers watch: the LFG
+	// queue lives only in memory, so when they see it change they replay their
+	// joins with the original queue timestamps instead of losing their place.
+	lfgService := lfg.NewService(uuid.NewString(), nil, service.NewGroupServiceMaker(groupService(cfg)))
+
 	grpcServer := grpc.NewServer()
-	matchmakingServer := server.NewMatchmakingServer(bgService, gameserverConnMgr)
+	matchmakingServer := server.NewMatchmakingServer(bgService, gameserverConnMgr, lfgService)
 	if cfg.LogLevel == zerolog.DebugLevel {
 		matchmakingServer = server.NewMatchmakingDebugLoggerMiddleware(matchmakingServer, log.Logger)
 	}
@@ -149,6 +157,18 @@ func main() {
 	wg.Wait()
 
 	log.Info().Msg("👍 Server successfully stopped.")
+}
+
+func groupService(cnf *config.Config) pbGroup.GroupServiceClient {
+	conn, err := grpc.Dial(cnf.GroupServiceAddress, grpc.WithInsecure(), grpc.WithContextDialer(func(ctx context.Context, s string) (net.Conn, error) {
+		dialer := net.Dialer{Timeout: time.Second * 5}
+		return dialer.DialContext(ctx, "tcp", s)
+	}))
+	if err != nil {
+		log.Fatal().Err(err).Msg("can't connect to group service")
+	}
+
+	return pbGroup.NewGroupServiceClient(conn)
 }
 
 func servRegistryService(cnf *config.Config) pbServ.ServersRegistryServiceClient {
