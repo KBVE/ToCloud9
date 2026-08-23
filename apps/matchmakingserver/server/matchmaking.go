@@ -22,14 +22,16 @@ type MatchmakingServer struct {
 
 	bgService   service.BattleGroundService
 	grpcConnMgr conn.GameServerGRPCConnMgr
-	lfgService  *lfg.Service
+	lfgService   *lfg.Service
+	battlegroups repo.BattleGroupsRepository
 }
 
-func NewMatchmakingServer(bgService service.BattleGroundService, grpcConnMgr conn.GameServerGRPCConnMgr, lfgService *lfg.Service) pb.MatchmakingServiceServer {
+func NewMatchmakingServer(bgService service.BattleGroundService, grpcConnMgr conn.GameServerGRPCConnMgr, lfgService *lfg.Service, battlegroups repo.BattleGroupsRepository) pb.MatchmakingServiceServer {
 	return &MatchmakingServer{
-		bgService:   bgService,
-		grpcConnMgr: grpcConnMgr,
-		lfgService:  lfgService,
+		bgService:    bgService,
+		grpcConnMgr:  grpcConnMgr,
+		lfgService:   lfgService,
+		battlegroups: battlegroups,
 	}
 }
 

@@ -16,6 +16,8 @@
 #include "core/thread_pool.h"
 #include "queue/handlers_queue.h"
 #include "grpc/grpc_manager.h"
+#include <vector>
+
 #include "grpc/clients.h"
 #include "nats/consumer.h"
 #include "nats/publisher.h"
@@ -489,6 +491,85 @@ TC9_API int TC9GroupInvite(uint64_t inviterGUID, uint64_t invitedGUID,
 
     return g_state.grpc_clients->InviteToGroup(g_state.realm_id, inviterGUID, invitedGUID,
                                                inviterName, invitedName) ? 0 : -1;
+}
+
+TC9_API int TC9JoinLFG(const char* requestID,
+                       uint64_t leaderGUID,
+                       const TC9LFGMember* members, int32_t memberCount,
+                       const uint32_t* selectedDungeonIDs, int32_t selectedDungeonCount,
+                       int64_t queuedAtUnixMilli,
+                       TC9LFGResult* out) {
+    if (!g_state.initialized || !g_state.grpc_clients || !requestID || !out) {
+        return -1;
+    }
+    if (!members || memberCount <= 0 || !selectedDungeonIDs || selectedDungeonCount <= 0) {
+        return -1;
+    }
+
+    std::vector<tc9::GrpcClients::LFGMember> converted;
+    converted.reserve(size_t(memberCount));
+    for (int32_t i = 0; i < memberCount; ++i) {
+        const TC9LFGMember& member = members[i];
+        // A member with no eligible dungeons can never match, and matchmaking
+        // rejects the whole entry for it. Fail here instead, where the caller
+        // still knows which member was wrong.
+        if (!member.eligibleDungeonIDs || member.eligibleDungeonCount <= 0) {
+            return -1;
+        }
+
+        tc9::GrpcClients::LFGMember entry;
+        entry.guid = member.playerGUID;
+        entry.realm_id = member.realmID ? member.realmID : g_state.realm_id;
+        entry.roles = member.roles;
+        entry.level = member.level;
+        entry.class_id = member.classID;
+        entry.name = member.name ? member.name : "";
+        entry.eligible_dungeons.assign(member.eligibleDungeonIDs,
+                                       member.eligibleDungeonIDs + member.eligibleDungeonCount);
+        converted.push_back(std::move(entry));
+    }
+
+    std::vector<uint32_t> selected(selectedDungeonIDs,
+                                   selectedDungeonIDs + selectedDungeonCount);
+
+    tc9::GrpcClients::LFGResult result;
+    if (!g_state.grpc_clients->JoinLFG(g_state.realm_id, requestID, leaderGUID, converted,
+                                       selected, queuedAtUnixMilli, result)) {
+        return -1;
+    }
+
+    out->status = result.status;
+    out->groupID = result.group_id;
+    out->dungeonID = result.dungeon_id;
+    out->assignedRole = result.assigned_role;
+    out->queuedAtUnixMilli = result.queued_at_unix_milli;
+    return 0;
+}
+
+TC9_API int TC9LeaveLFG(uint64_t playerGUID) {
+    if (!g_state.initialized || !g_state.grpc_clients) {
+        return -1;
+    }
+
+    return g_state.grpc_clients->LeaveLFG(g_state.realm_id, playerGUID) ? 0 : -1;
+}
+
+TC9_API int TC9GetLFGStatus(uint64_t playerGUID, TC9LFGResult* out) {
+    if (!g_state.initialized || !g_state.grpc_clients || !out) {
+        return -1;
+    }
+
+    tc9::GrpcClients::LFGResult result;
+    if (!g_state.grpc_clients->GetLFGStatus(g_state.realm_id, playerGUID, result)) {
+        return -1;
+    }
+
+    out->status = result.status;
+    out->groupID = result.group_id;
+    out->dungeonID = result.dungeon_id;
+    out->assignedRole = result.assigned_role;
+    out->queuedAtUnixMilli = result.queued_at_unix_milli;
+    return 0;
 }
 
 TC9_API int TC9GroupAcceptInvite(uint64_t playerGUID) {

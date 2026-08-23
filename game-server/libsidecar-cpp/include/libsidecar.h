@@ -98,6 +98,52 @@ TC9_API int TC9GroupInvite(uint64_t inviterGUID, uint64_t invitedGUID,
 TC9_API int TC9GroupAcceptInvite(uint64_t playerGUID);
 TC9_API int TC9GroupLeave(uint64_t playerGUID);
 
+/* Dungeon finder. The queue lives in the matchmaking service so that one
+ * allocator mints every group id: each worldserver's GroupMgr counts from 1
+ * independently, so two shards forming a party both call it group 1.
+ *
+ * eligibleDungeonIDs is the core's own verdict -- level, difficulty, expansion,
+ * attunement, gear, lockout, deserter. Matchmaking only intersects these sets
+ * and can never widen one, so anything the core does not list here is
+ * unreachable. */
+typedef struct {
+    uint64_t playerGUID;
+    uint32_t realmID;
+    uint32_t roles; /* bitmask: 1 tank, 2 healer, 4 damage */
+    uint32_t level;
+    uint32_t classID;
+    const char* name;
+    const uint32_t* eligibleDungeonIDs;
+    int32_t eligibleDungeonCount;
+} TC9LFGMember;
+
+enum TC9LFGStatus {
+    TC9_LFG_STATUS_NONE = 0,
+    TC9_LFG_STATUS_QUEUED = 1,
+    TC9_LFG_STATUS_GROUPED = 2
+};
+
+typedef struct {
+    int32_t status; /* TC9LFGStatus */
+    uint64_t groupID;
+    uint32_t dungeonID;
+    uint32_t assignedRole;
+    int64_t queuedAtUnixMilli;
+} TC9LFGResult;
+
+/* requestID makes the join idempotent: the queue is in memory only, so a
+ * caller that sees instanceID change replays with the same requestID and the
+ * original queuedAtUnixMilli instead of losing its place. Pass 0 for
+ * queuedAtUnixMilli on a first attempt. */
+TC9_API int TC9JoinLFG(const char* requestID,
+                       uint64_t leaderGUID,
+                       const TC9LFGMember* members, int32_t memberCount,
+                       const uint32_t* selectedDungeonIDs, int32_t selectedDungeonCount,
+                       int64_t queuedAtUnixMilli,
+                       TC9LFGResult* out);
+TC9_API int TC9LeaveLFG(uint64_t playerGUID);
+TC9_API int TC9GetLFGStatus(uint64_t playerGUID, TC9LFGResult* out);
+
 /* Guild operations for in-process sessions (no gateway to call the guild
  * service on their behalf). The guild service owns guild creation: it
  * allocates the guild id, inserts the guild, default ranks and leader rows,

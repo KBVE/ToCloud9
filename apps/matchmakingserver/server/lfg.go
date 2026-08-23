@@ -18,9 +18,23 @@ func (s *MatchmakingServer) JoinLFG(ctx context.Context, req *pb.JoinLFGRequest)
 		return nil, status.Error(codes.Unavailable, "lfg is not enabled")
 	}
 
+	// Callers that do not know their battlegroup send 0. Resolving it here
+	// rather than defaulting keeps two realms from sharing one dungeon queue
+	// when they were never put in the same battlegroup, and keeps the queue key
+	// out of the realm-id namespace, where a realm 1 and a battlegroup 1 would
+	// otherwise collide.
+	battlegroupID := req.BattlegroupID
+	if battlegroupID == 0 {
+		resolved, err := s.battlegroups.BattleGroupIDByRealmID(ctx, req.RealmID)
+		if err != nil {
+			return nil, err
+		}
+		battlegroupID = resolved
+	}
+
 	entry := &lfg.Entry{
 		RequestID:     req.RequestID,
-		BattlegroupID: req.BattlegroupID,
+		BattlegroupID: battlegroupID,
 		Leader:        lfg.PlayerKey{RealmID: req.RealmID, GUID: req.LeaderGUID},
 		Members:       make([]lfg.Member, 0, len(req.Members)),
 	}

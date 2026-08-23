@@ -94,6 +94,41 @@ public:
         bool is_cross_realm,
         uint8_t status);
 
+    // Dungeon finder. The matchmaking service holds the queue and forms the
+    // party through the group service, so the group id comes from one
+    // cluster-wide allocator instead of each worldserver's own GroupMgr.
+    struct LFGMember {
+        uint64_t guid;
+        uint32_t realm_id;
+        uint32_t roles;
+        uint32_t level;
+        uint32_t class_id;
+        std::string name;
+        std::vector<uint32_t> eligible_dungeons;
+    };
+
+    struct LFGResult {
+        int32_t status = 0;
+        uint64_t group_id = 0;
+        uint32_t dungeon_id = 0;
+        uint32_t assigned_role = 0;
+        int64_t queued_at_unix_milli = 0;
+        std::string instance_id;
+    };
+
+    bool JoinLFG(
+        uint32_t realm_id,
+        const std::string& request_id,
+        uint64_t leader_guid,
+        const std::vector<LFGMember>& members,
+        const std::vector<uint32_t>& selected_dungeons,
+        int64_t queued_at_unix_milli,
+        LFGResult& out);
+
+    bool LeaveLFG(uint32_t realm_id, uint64_t player_guid);
+
+    bool GetLFGStatus(uint32_t realm_id, uint64_t player_guid, LFGResult& out);
+
     // Group Client (group service owns groups cluster-wide; in-process
     // sessions have no gateway, so the worldserver calls it on their behalf)
     bool InviteToGroup(

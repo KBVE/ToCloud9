@@ -57,6 +57,127 @@ void GrpcClients::Connect(const std::string& registry_addr,
     spdlog::info("✅ All gRPC clients connected");
 }
 
+namespace {
+
+void FillLFGResult(const std::string& instance_id,
+                   int32_t status,
+                   uint64_t group_id,
+                   uint32_t dungeon_id,
+                   uint32_t assigned_role,
+                   int64_t queued_at_unix_milli,
+                   GrpcClients::LFGResult& out) {
+    out.instance_id = instance_id;
+    out.status = status;
+    out.group_id = group_id;
+    out.dungeon_id = dungeon_id;
+    out.assigned_role = assigned_role;
+    out.queued_at_unix_milli = queued_at_unix_milli;
+}
+
+}  // namespace
+
+bool GrpcClients::JoinLFG(uint32_t realm_id,
+                          const std::string& request_id,
+                          uint64_t leader_guid,
+                          const std::vector<LFGMember>& members,
+                          const std::vector<uint32_t>& selected_dungeons,
+                          int64_t queued_at_unix_milli,
+                          LFGResult& out) {
+    if (!connected_ || !matchmaking_stub_) {
+        spdlog::error("Matchmaking client not connected");
+        return false;
+    }
+
+    v1::JoinLFGRequest request;
+    request.set_api(LIB_VERSION);
+    request.set_requestid(request_id);
+    request.set_realmid(realm_id);
+    request.set_leaderguid(leader_guid);
+    request.set_queuedatunixmilli(queued_at_unix_milli);
+
+    for (uint32_t dungeon : selected_dungeons) {
+        request.add_selecteddungeonids(dungeon);
+    }
+
+    for (const LFGMember& member : members) {
+        v1::LFGMember* entry = request.add_members();
+        entry->set_realmid(member.realm_id);
+        entry->set_playerguid(member.guid);
+        entry->set_roles(member.roles);
+        entry->set_level(member.level);
+        entry->set_classid(member.class_id);
+        entry->set_name(member.name);
+        for (uint32_t dungeon : member.eligible_dungeons) {
+            entry->add_eligibledungeonids(dungeon);
+        }
+    }
+
+    v1::JoinLFGResponse response;
+    grpc::ClientContext context;
+    context.set_deadline(Deadline());
+
+    grpc::Status status = matchmaking_stub_->JoinLFG(&context, request, &response);
+    if (!status.ok()) {
+        spdlog::error("JoinLFG failed for leader {}: {}", leader_guid, status.error_message());
+        return false;
+    }
+
+    FillLFGResult(response.instanceid(), int32_t(response.status()), response.groupid(),
+                  response.dungeonid(), uint32_t(response.assignedrole()), 0, out);
+    return true;
+}
+
+bool GrpcClients::LeaveLFG(uint32_t realm_id, uint64_t player_guid) {
+    if (!connected_ || !matchmaking_stub_) {
+        spdlog::error("Matchmaking client not connected");
+        return false;
+    }
+
+    v1::LeaveLFGRequest request;
+    request.set_api(LIB_VERSION);
+    request.set_realmid(realm_id);
+    request.set_playerguid(player_guid);
+
+    v1::LeaveLFGResponse response;
+    grpc::ClientContext context;
+    context.set_deadline(Deadline());
+
+    grpc::Status status = matchmaking_stub_->LeaveLFG(&context, request, &response);
+    if (!status.ok()) {
+        spdlog::error("LeaveLFG failed for {}: {}", player_guid, status.error_message());
+        return false;
+    }
+
+    return true;
+}
+
+bool GrpcClients::GetLFGStatus(uint32_t realm_id, uint64_t player_guid, LFGResult& out) {
+    if (!connected_ || !matchmaking_stub_) {
+        spdlog::error("Matchmaking client not connected");
+        return false;
+    }
+
+    v1::GetLFGStatusRequest request;
+    request.set_api(LIB_VERSION);
+    request.set_realmid(realm_id);
+    request.set_playerguid(player_guid);
+
+    v1::GetLFGStatusResponse response;
+    grpc::ClientContext context;
+    context.set_deadline(Deadline());
+
+    grpc::Status status = matchmaking_stub_->GetLFGStatus(&context, request, &response);
+    if (!status.ok()) {
+        spdlog::error("GetLFGStatus failed for {}: {}", player_guid, status.error_message());
+        return false;
+    }
+
+    FillLFGResult(response.instanceid(), int32_t(response.status()), response.groupid(),
+                  response.dungeonid(), uint32_t(response.assignedrole()),
+                  response.queuedatunixmilli(), out);
+    return true;
+}
+
 bool GrpcClients::InviteToGroup(uint32_t realm_id,
                                 uint64_t inviter_guid,
                                 uint64_t invited_guid,

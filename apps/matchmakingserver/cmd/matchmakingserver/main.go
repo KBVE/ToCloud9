@@ -126,7 +126,7 @@ func main() {
 	lfgService := lfg.NewService(uuid.NewString(), nil, service.NewGroupServiceMaker(groupService(cfg)))
 
 	grpcServer := grpc.NewServer()
-	matchmakingServer := server.NewMatchmakingServer(bgService, gameserverConnMgr, lfgService)
+	matchmakingServer := server.NewMatchmakingServer(bgService, gameserverConnMgr, lfgService, battlegroupsRepo)
 	if cfg.LogLevel == zerolog.DebugLevel {
 		matchmakingServer = server.NewMatchmakingDebugLoggerMiddleware(matchmakingServer, log.Logger)
 	}
