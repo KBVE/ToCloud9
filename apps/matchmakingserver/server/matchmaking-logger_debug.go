@@ -95,3 +95,39 @@ func (m *matchmakingDebugLoggerMiddleware) BattlegroundStatusChanged(ctx context
 	res, err = m.mmServer.BattlegroundStatusChanged(ctx, params)
 	return
 }
+
+func (m *matchmakingDebugLoggerMiddleware) JoinLFG(ctx context.Context, params *pb.JoinLFGRequest) (res *pb.JoinLFGResponse, err error) {
+	defer func(t time.Time) {
+		m.logger.Debug().
+			Interface("payload", params).
+			Err(err).
+			Msgf("Handled JoinLFG for %v.", time.Since(t))
+	}(time.Now())
+
+	res, err = m.mmServer.JoinLFG(ctx, params)
+	return
+}
+
+func (m *matchmakingDebugLoggerMiddleware) LeaveLFG(ctx context.Context, params *pb.LeaveLFGRequest) (res *pb.LeaveLFGResponse, err error) {
+	defer func(t time.Time) {
+		m.logger.Debug().
+			Interface("payload", params).
+			Err(err).
+			Msgf("Handled LeaveLFG for %v.", time.Since(t))
+	}(time.Now())
+
+	res, err = m.mmServer.LeaveLFG(ctx, params)
+	return
+}
+
+func (m *matchmakingDebugLoggerMiddleware) GetLFGStatus(ctx context.Context, params *pb.GetLFGStatusRequest) (res *pb.GetLFGStatusResponse, err error) {
+	defer func(t time.Time) {
+		m.logger.Debug().
+			Interface("payload", params).
+			Err(err).
+			Msgf("Handled GetLFGStatus for %v.", time.Since(t))
+	}(time.Now())
+
+	res, err = m.mmServer.GetLFGStatus(ctx, params)
+	return
+}
