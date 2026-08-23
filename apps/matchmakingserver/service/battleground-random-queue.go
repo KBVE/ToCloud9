@@ -49,6 +49,10 @@ func (b BattlegroundRandomQueue) GetQueueTypeID() battleground.QueueTypeID {
 	return battleground.QueueTypeIDRandomBattleground
 }
 
+func (b BattlegroundRandomQueue) Process(ctx context.Context) error {
+	return b.realQ.process(ctx)
+}
+
 func (b BattlegroundRandomQueue) CreateBattleground(
 	ctx context.Context,
 	template repo.BattlegroundTemplate,
@@ -57,7 +61,9 @@ func (b BattlegroundRandomQueue) CreateBattleground(
 	realmID, battlegroupID uint32,
 	allianceGroups, hordeGroups []QueuedGroup,
 ) error {
-	// Generate a new bg
-	b.realQ.BattlegroundTypeID = battleground.TypeID(b.service.TemplateForQueueTypeID(ctx, battleground.QueueTypeIDRandomBattleground).TypeID)
+	// The draw already happened in process(), which sized the teams against
+	// this template. Rolling again here would spawn a battleground with
+	// different player limits than the one the queue was matched for.
+	b.realQ.BattlegroundTypeID = battleground.TypeID(template.TypeID)
 	return b.service.CreateBattleground(ctx, template, queueType, bracketID, realmID, battlegroupID, allianceGroups, hordeGroups)
 }

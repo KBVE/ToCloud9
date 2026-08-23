@@ -175,6 +175,8 @@ func NewBattleGroundService(
 	service.queues = generateQueuesForAllBattlegroundTypes(&service, realmIDs, battlegroups)
 	crossRealmNodesTracker.SetObserver(&service)
 
+	go service.processQueuesLoop()
+
 	if crossRealmNodesTracker.IsCrossRealmNodeAvailable() {
 		log.Info().Msg("Crossrealm enabled")
 	} else {
@@ -182,6 +184,34 @@ func NewBattleGroundService(
 	}
 
 	return &service, nil
+}
+
+const queueProcessInterval = 5 * time.Second
+
+// processQueuesLoop retries matchmaking for every queue on a fixed interval.
+// Without it, a match is only ever attempted at the moment someone enqueues:
+// a queue that already holds enough players but drew a template whose
+// MinPlayersPerTeam they cannot reach (Alterac Valley and Isle of Conquest
+// want 20 a side) never tries again and the players sit there indefinitely.
+func (s *battleGroundService) processQueuesLoop() {
+	ticker := time.NewTicker(queueProcessInterval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		for _, typesMap := range s.queues {
+			for _, bracketsMap := range typesMap {
+				for _, queue := range bracketsMap {
+					if len(queue.GetAllQueuedGroups()) == 0 {
+						continue
+					}
+
+					if err := queue.Process(context.Background()); err != nil {
+						log.Error().Err(err).Msg("cannot process pvp queue")
+					}
+				}
+			}
+		}
+	}
 }
 
 func (s *battleGroundService) TemplateForQueueTypeID(ctx context.Context, id battleground.QueueTypeID) repo.BattlegroundTemplate {

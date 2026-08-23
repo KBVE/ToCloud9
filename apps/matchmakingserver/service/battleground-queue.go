@@ -44,6 +44,12 @@ type PVPQueue interface {
 	QueuedGroupByPlayer(player guid.PlayerUnwrapped) *QueuedGroup
 
 	GetQueueTypeID() battleground.QueueTypeID
+
+	// Process retries matchmaking for whatever is already queued. Enqueueing
+	// used to be the only trigger, so a queue that held enough players but
+	// rolled a template they could not fill stayed stuck until someone else
+	// joined -- with a closed bot fleet, forever.
+	Process(ctx context.Context) error
 }
 
 type GenericBattlegroundQueue struct {
@@ -77,6 +83,10 @@ func NewGenericBattlegroundQueue(service BattleGroundService, battleGroundCreato
 
 func (q *GenericBattlegroundQueue) GetQueueTypeID() battleground.QueueTypeID {
 	return q.QueueTypeID
+}
+
+func (q *GenericBattlegroundQueue) Process(ctx context.Context) error {
+	return q.process(ctx)
 }
 
 func (q *GenericBattlegroundQueue) AddQueuedGroup(g *QueuedGroup) error {
@@ -174,7 +184,10 @@ func (q *GenericBattlegroundQueue) process(ctx context.Context) error {
 		}
 	}
 
-	// Try to create a new battleground
+	// Try to create a new battleground. The template is resolved ONCE: for the
+	// random queue getBattlegroundTemplate rolls a weighted draw, so calling it
+	// again below would size the match against one battleground and create a
+	// different one.
 	template := q.getBattlegroundTemplate()
 	allianceGroup, hordeGroup := q.balancedGroups(int(template.MinPlayersPerTeam), int(template.MaxPlayersPerTeam))
 
@@ -183,7 +196,7 @@ func (q *GenericBattlegroundQueue) process(ctx context.Context) error {
 		return nil
 	}
 
-	err = q.battleGroundCreator.CreateBattleground(ctx, q.getBattlegroundTemplate(), q.QueueTypeID, BracketID(q.BracketID), q.RealmID, q.BattleGroupID, allianceGroup, hordeGroup)
+	err = q.battleGroundCreator.CreateBattleground(ctx, template, q.QueueTypeID, BracketID(q.BracketID), q.RealmID, q.BattleGroupID, allianceGroup, hordeGroup)
 	if err != nil {
 		return fmt.Errorf("failed to create battleground: %w", err)
 	}
