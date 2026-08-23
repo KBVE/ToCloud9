@@ -93,6 +93,8 @@ TC9_API int TC9NatsSubscribe(const char* subject, TC9NatsMessageHandler handler)
 /* Group operations for in-process sessions (no gateway to call the group
  * service on their behalf). Blocking gRPC call, do not call from map update
  * threads. Returns 0 on success, -1 on error. */
+TC9_API int TC9GroupInvite(uint64_t inviterGUID, uint64_t invitedGUID,
+                           const char* inviterName, const char* invitedName);
 TC9_API int TC9GroupAcceptInvite(uint64_t playerGUID);
 TC9_API int TC9GroupLeave(uint64_t playerGUID);
 

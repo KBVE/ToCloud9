@@ -96,6 +96,13 @@ public:
 
     // Group Client (group service owns groups cluster-wide; in-process
     // sessions have no gateway, so the worldserver calls it on their behalf)
+    bool InviteToGroup(
+        uint32_t realm_id,
+        uint64_t inviter_guid,
+        uint64_t invited_guid,
+        const std::string& inviter_name,
+        const std::string& invited_name);
+
     bool AcceptGroupInvite(
         uint32_t realm_id,
         uint64_t player_guid);

@@ -57,6 +57,44 @@ void GrpcClients::Connect(const std::string& registry_addr,
     spdlog::info("✅ All gRPC clients connected");
 }
 
+bool GrpcClients::InviteToGroup(uint32_t realm_id,
+                                uint64_t inviter_guid,
+                                uint64_t invited_guid,
+                                const std::string& inviter_name,
+                                const std::string& invited_name) {
+    if (!connected_ || !group_stub_) {
+        spdlog::error("Group client not connected");
+        return false;
+    }
+
+    v1::InviteParams request;
+    request.set_api(LIB_VERSION);
+    request.set_realmid(realm_id);
+    request.set_inviter(inviter_guid);
+    request.set_invited(invited_guid);
+    request.set_invitername(inviter_name);
+    request.set_invitedname(invited_name);
+
+    v1::InviteResponse response;
+    grpc::ClientContext context;
+    context.set_deadline(Deadline());
+
+    grpc::Status status = group_stub_->Invite(&context, request, &response);
+    if (!status.ok()) {
+        spdlog::error("InviteToGroup failed for {} -> {}: {}",
+                      inviter_guid, invited_guid, status.error_message());
+        return false;
+    }
+
+    if (response.status() != v1::InviteResponse::Ok) {
+        spdlog::warn("InviteToGroup rejected for {} -> {}: status {}",
+                     inviter_guid, invited_guid, int(response.status()));
+        return false;
+    }
+
+    return true;
+}
+
 bool GrpcClients::AcceptGroupInvite(uint32_t realm_id, uint64_t player_guid) {
     if (!connected_ || !group_stub_) {
         spdlog::error("Group client not connected");
