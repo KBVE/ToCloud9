@@ -37,7 +37,19 @@ type Service struct {
 	entries  map[string]*Entry
 	players  map[PlayerKey]*Entry
 	grouped  map[PlayerKey]PlayerStatus
-	requests map[string]uint64
+	requests map[string]formedGroup
+}
+
+// requestRetention bounds how long a request id keeps returning the group it
+// formed. It exists to absorb an RPC retry, nothing longer. Keeping entries
+// forever made a caller whose request ids restart -- AC's proposal counter
+// resets when a worldserver restarts -- collide with a stale entry and get
+// handed a group formed for entirely different players.
+const requestRetention = 2 * time.Minute
+
+type formedGroup struct {
+	groupID uint64
+	formed  time.Time
 }
 
 func NewService(instanceID string, policy MatchPolicy, groups GroupMaker) *Service {
@@ -53,7 +65,7 @@ func NewService(instanceID string, policy MatchPolicy, groups GroupMaker) *Servi
 		entries:    make(map[string]*Entry),
 		players:    make(map[PlayerKey]*Entry),
 		grouped:    make(map[PlayerKey]PlayerStatus),
-		requests:   make(map[string]uint64),
+		requests:   make(map[string]formedGroup),
 	}
 }
 
@@ -68,12 +80,20 @@ func (s *Service) Join(ctx context.Context, entry *Entry) (PlayerStatus, error) 
 
 	s.mut.Lock()
 
-	if groupID, found := s.requests[entry.RequestID]; found {
-		status := s.grouped[entry.Leader]
-		status.Status = StatusGrouped
-		status.GroupID = groupID
-		s.mut.Unlock()
-		return status, nil
+	if formed, found := s.requests[entry.RequestID]; found {
+		if s.now().Sub(formed.formed) > requestRetention {
+			delete(s.requests, entry.RequestID)
+		} else {
+			// Only answer from the cache when this really is the same party.
+			// A reused request id whose members have moved on must form a new
+			// group, not inherit one built for other players.
+			status, stillGrouped := s.grouped[entry.Leader]
+			if stillGrouped && status.GroupID == formed.groupID {
+				s.mut.Unlock()
+				return status, nil
+			}
+			delete(s.requests, entry.RequestID)
+		}
 	}
 	if _, found := s.entries[entry.RequestID]; found {
 		leader := entry.Leader
@@ -136,7 +156,12 @@ func (s *Service) Join(ctx context.Context, entry *Entry) (PlayerStatus, error) 
 		roles[assignment.Player] = assignment.Role
 	}
 	for _, matched := range match.Entries {
-		s.requests[matched.RequestID] = groupID
+		// The entry is no longer queued, so it must not keep occupying the
+		// request index: leaving it there made a later join reusing the same
+		// request id report "already queued" and never form its own group.
+		// Idempotency for a retry is s.requests' job, and it is time-bounded.
+		delete(s.entries, matched.RequestID)
+		s.requests[matched.RequestID] = formedGroup{groupID: groupID, formed: s.now()}
 		for _, member := range matched.Members {
 			s.grouped[member.PlayerKey] = PlayerStatus{
 				Status:       StatusGrouped,

@@ -350,3 +350,53 @@ func TestInvalidEntriesAreRejected(t *testing.T) {
 		t.Fatalf("expected ErrInvalidEntry when the leader is not in the member list, got %v", err)
 	}
 }
+
+// AC builds its request id from a per-worldserver proposal counter, and that
+// counter restarts when the worldserver does. This service does not restart
+// with it, so a fresh proposal 2 arrived carrying the id of a proposal 2 that
+// had formed a group half an hour earlier -- and got handed that group. The
+// live symptom was four newly matched bots appearing in a stale group from the
+// previous run, with no invites issued and the call returning in microseconds.
+func TestReusedRequestIDDoesNotInheritAStaleGroup(t *testing.T) {
+	groups := &fakeGroupMaker{}
+	service := NewService("instance-1", nil, groups)
+
+	for _, entry := range fiveSolos(285) {
+		if _, err := service.Join(context.Background(), entry); err != nil {
+			t.Fatalf("join %s: %v", entry.RequestID, err)
+		}
+	}
+	if groups.calls != 1 {
+		t.Fatalf("expected the first party to form one group, got %d", groups.calls)
+	}
+	firstGroup := groups.nextID
+
+	// A different five, reusing the same request ids after a worldserver restart.
+	start := base().Add(time.Hour)
+	second := []*Entry{
+		solo("tank", 21, RoleTank, start, 285),
+		solo("healer", 22, RoleHealer, start.Add(time.Second), 285),
+		solo("dps1", 23, RoleDamage, start.Add(2*time.Second), 285),
+		solo("dps2", 24, RoleDamage, start.Add(3*time.Second), 285),
+		solo("dps3", 25, RoleDamage, start.Add(4*time.Second), 285),
+	}
+
+	var last PlayerStatus
+	for _, entry := range second {
+		status, err := service.Join(context.Background(), entry)
+		if err != nil {
+			t.Fatalf("join %s: %v", entry.RequestID, err)
+		}
+		last = status
+	}
+
+	if groups.calls != 2 {
+		t.Fatalf("the second party must form its own group, got %d creations", groups.calls)
+	}
+	if last.GroupID == firstGroup {
+		t.Fatalf("second party inherited the first party's group %d", firstGroup)
+	}
+	if got := groups.sizes[1]; got != 5 {
+		t.Fatalf("expected a fresh 5-man group, got %d", got)
+	}
+}
