@@ -299,6 +299,18 @@ func (g groupServiceImpl) AcceptInvite(ctx context.Context, realmID uint32, play
 		return ErrGroupNotFound
 	}
 
+	// A retried accept must not be an error. Without this the second delivery
+	// reaches addMember and the insert fails on the group_member primary key --
+	// seen in production as
+	//   Handled AcceptInvite error="Error 1062 (23000): Duplicate entry '6'
+	//   for key 'group_member.PRIMARY'"
+	// while the player was already correctly in the group. The caller has no
+	// way to tell that apart from a real failure, so it reports the join as
+	// broken when it worked.
+	if group.MemberByGUID(player) != nil {
+		return nil
+	}
+
 	return g.addMember(ctx, realmID, group, invite)
 }
 
