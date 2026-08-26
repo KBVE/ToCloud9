@@ -7,6 +7,7 @@
 #include "player-interactions-api.h"
 #include "player-items-api.h"
 #include "player-money-api.h"
+#include "kbve-auction-api.h"
 
 #include "libsidecar/tc9_types.h"
 #include "libsidecar/tc9_events.h"
@@ -143,7 +144,8 @@ TC9_API void TC9InitLib(
             config.guid_provider_address(),
             config.matchmaking_address(),
             config.group_service_address(),
-            config.guild_service_address()
+            config.guild_service_address(),
+            config.auctionhouse_address()
         );
 
         // In cross-realm mode this server hosts several realms and player GUIDs
@@ -1298,3 +1300,126 @@ TC9_API void TC9SetMonitoringDataCollectorHandler(MonitoringDataCollectorHandler
 }
 
 }  // extern "C"
+
+// ---------------------------------------------------------------------------
+// KBVE auction extension. See include/kbve-auction-api.h for why these carry a
+// KBVE prefix instead of TC9.
+// ---------------------------------------------------------------------------
+
+TC9_API int KBVEAuctionAvailable(void) {
+    return (g_state.initialized && g_state.grpc_clients) ? 1 : 0;
+}
+
+TC9_API int KBVEAuctionAbiVersion(void) {
+    return KBVE_AUCTION_ABI_VERSION;
+}
+
+TC9_API int KBVEAuctionSellItem(
+    uint64_t playerGUID,
+    uint32_t houseID,
+    uint32_t itemEntry,
+    uint64_t itemGuid,
+    uint32_t itemCount,
+    uint32_t startBid,
+    uint32_t buyout,
+    uint32_t expireTimeSecs,
+    uint32_t deposit,
+    uint32_t* outAuctionID) {
+
+    if (!g_state.initialized || !g_state.grpc_clients) {
+        return -1;
+    }
+
+    uint32_t auction_id = 0;
+    if (!g_state.grpc_clients->AuctionSellItem(
+            g_state.realm_id, playerGUID, houseID, itemEntry, itemGuid,
+            itemCount, startBid, buyout, expireTimeSecs, deposit, auction_id)) {
+        return -1;
+    }
+
+    if (outAuctionID) {
+        *outAuctionID = auction_id;
+    }
+    return 0;
+}
+
+TC9_API int KBVEAuctionListItems(
+    uint64_t playerGUID,
+    uint32_t houseID,
+    uint32_t listFrom,
+    const char* searchedName,
+    uint32_t itemClass,
+    uint32_t itemSubClass,
+    uint32_t quality,
+    KBVEAuctionListing* outListings,
+    uint32_t maxListings,
+    uint32_t* outCount,
+    uint32_t* outTotal) {
+
+    if (!g_state.initialized || !g_state.grpc_clients) {
+        return -1;
+    }
+
+    std::vector<tc9::GrpcClients::AuctionListing> listings;
+    uint32_t total = 0;
+    if (!g_state.grpc_clients->AuctionListItems(
+            g_state.realm_id, playerGUID, houseID, listFrom,
+            searchedName ? searchedName : "", itemClass, itemSubClass, quality,
+            listings, total)) {
+        return -1;
+    }
+
+    uint32_t written = 0;
+    if (outListings && maxListings > 0) {
+        for (const auto& l : listings) {
+            if (written >= maxListings) {
+                break;
+            }
+            outListings[written].auctionID = l.auction_id;
+            outListings[written].itemEntry = l.item_entry;
+            outListings[written].itemGuid = l.item_guid;
+            outListings[written].itemCount = l.item_count;
+            outListings[written].ownerGuid = l.owner_guid;
+            outListings[written].startBid = l.start_bid;
+            outListings[written].buyout = l.buyout;
+            outListings[written].bid = l.current_bid;
+            outListings[written].bidderGuid = l.bidder_guid;
+            ++written;
+        }
+    }
+
+    if (outCount) {
+        *outCount = written;
+    }
+    if (outTotal) {
+        *outTotal = total;
+    }
+    return 0;
+}
+
+TC9_API int KBVEAuctionPlaceBid(
+    uint64_t playerGUID,
+    uint32_t houseID,
+    uint32_t auctionID,
+    uint32_t price) {
+
+    if (!g_state.initialized || !g_state.grpc_clients) {
+        return -1;
+    }
+
+    return g_state.grpc_clients->AuctionPlaceBid(
+        g_state.realm_id, playerGUID, houseID, auctionID, price) ? 0 : -1;
+}
+
+TC9_API int KBVEAuctionCancel(
+    uint64_t playerGUID,
+    uint32_t houseID,
+    uint32_t auctionID) {
+
+    if (!g_state.initialized || !g_state.grpc_clients) {
+        return -1;
+    }
+
+    return g_state.grpc_clients->AuctionCancel(
+        g_state.realm_id, playerGUID, houseID, auctionID) ? 0 : -1;
+}

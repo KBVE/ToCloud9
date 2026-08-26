@@ -11,6 +11,7 @@
 #include "matchmaking/matchmaking.grpc.pb.h"
 #include "group/group.grpc.pb.h"
 #include "guilds/guilds.grpc.pb.h"
+#include "auctionhouse/auctionhouse.grpc.pb.h"
 
 namespace tc9 {
 
@@ -24,7 +25,8 @@ public:
                  const std::string& guid_addr,
                  const std::string& matchmaking_addr,
                  const std::string& group_addr,
-                 const std::string& guild_addr);
+                 const std::string& guild_addr,
+                 const std::string& auction_addr);
 
     // Servers Registry Client
     bool RegisterGameServer(
@@ -125,6 +127,62 @@ public:
         int64_t queued_at_unix_milli,
         LFGResult& out);
 
+    // Auction House Client (KBVE extension).
+    //
+    // ToCloud9 lifted the auction house out of the worldserver into a
+    // cluster-wide service, so the in-process AuctionHouseMgr a stock
+    // AzerothCore module would drive writes a view nothing reads. These
+    // wrappers are the only correct path from a shard to the real auctions.
+    struct AuctionListing {
+        uint32_t auction_id = 0;
+        uint32_t item_entry = 0;
+        uint64_t item_guid = 0;
+        uint32_t item_count = 0;
+        uint64_t owner_guid = 0;
+        uint32_t start_bid = 0;
+        uint32_t buyout = 0;
+        uint32_t current_bid = 0;
+        uint64_t bidder_guid = 0;
+    };
+
+    bool AuctionSellItem(
+        uint32_t realm_id,
+        uint64_t player_guid,
+        uint32_t house_id,
+        uint32_t item_entry,
+        uint64_t item_guid,
+        uint32_t item_count,
+        uint32_t start_bid,
+        uint32_t buyout,
+        uint32_t expire_time_secs,
+        uint32_t deposit,
+        uint32_t& out_auction_id);
+
+    bool AuctionListItems(
+        uint32_t realm_id,
+        uint64_t player_guid,
+        uint32_t house_id,
+        uint32_t list_from,
+        const std::string& searched_name,
+        uint32_t item_class,
+        uint32_t item_subclass,
+        uint32_t quality,
+        std::vector<AuctionListing>& out_listings,
+        uint32_t& out_total);
+
+    bool AuctionPlaceBid(
+        uint32_t realm_id,
+        uint64_t player_guid,
+        uint32_t house_id,
+        uint32_t auction_id,
+        uint32_t price);
+
+    bool AuctionCancel(
+        uint32_t realm_id,
+        uint64_t player_guid,
+        uint32_t house_id,
+        uint32_t auction_id);
+
     bool LeaveLFG(uint32_t realm_id, uint64_t player_guid);
 
     bool GetLFGStatus(uint32_t realm_id, uint64_t player_guid, LFGResult& out);
@@ -180,11 +238,13 @@ private:
     std::shared_ptr<grpc::Channel> matchmaking_channel_;
     std::shared_ptr<grpc::Channel> group_channel_;
     std::shared_ptr<grpc::Channel> guild_channel_;
+    std::shared_ptr<grpc::Channel> auction_channel_;
 
     // gRPC stubs
     std::unique_ptr<v1::ServersRegistryService::Stub> registry_stub_;
     std::unique_ptr<v1::GuidService::Stub> guid_stub_;
     std::unique_ptr<v1::MatchmakingService::Stub> matchmaking_stub_;
+    std::unique_ptr<v1::AuctionHouseService::Stub> auction_stub_;
     std::unique_ptr<v1::GroupService::Stub> group_stub_;
     std::unique_ptr<v1::GuildService::Stub> guild_stub_;
 

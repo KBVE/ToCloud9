@@ -4,6 +4,7 @@
 #include "matchmaking/matchmaking.grpc.pb.h"
 #include "group/group.grpc.pb.h"
 #include "guilds/guilds.grpc.pb.h"
+#include "auctionhouse/auctionhouse.grpc.pb.h"
 #include <spdlog/spdlog.h>
 
 namespace tc9 {
@@ -24,7 +25,8 @@ void GrpcClients::Connect(const std::string& registry_addr,
                           const std::string& guid_addr,
                           const std::string& matchmaking_addr,
                           const std::string& group_addr,
-                          const std::string& guild_addr) {
+                          const std::string& guild_addr,
+                          const std::string& auction_addr) {
     std::lock_guard<std::mutex> lock(mutex_);
 
     spdlog::info("Connecting to gRPC services:");
@@ -33,6 +35,7 @@ void GrpcClients::Connect(const std::string& registry_addr,
     spdlog::info("  - Matchmaking: {}", matchmaking_addr);
     spdlog::info("  - Group: {}", group_addr);
     spdlog::info("  - Guild: {}", guild_addr);
+    spdlog::info("  - Auction: {}", auction_addr);
 
     // Create channels (using insecure credentials for now)
     registry_channel_ = grpc::CreateChannel(
@@ -45,6 +48,8 @@ void GrpcClients::Connect(const std::string& registry_addr,
         group_addr, grpc::InsecureChannelCredentials());
     guild_channel_ = grpc::CreateChannel(
         guild_addr, grpc::InsecureChannelCredentials());
+    auction_channel_ = grpc::CreateChannel(
+        auction_addr, grpc::InsecureChannelCredentials());
 
     // Create stubs
     registry_stub_ = v1::ServersRegistryService::NewStub(registry_channel_);
@@ -52,6 +57,7 @@ void GrpcClients::Connect(const std::string& registry_addr,
     matchmaking_stub_ = v1::MatchmakingService::NewStub(matchmaking_channel_);
     group_stub_ = v1::GroupService::NewStub(group_channel_);
     guild_stub_ = v1::GuildService::NewStub(guild_channel_);
+    auction_stub_ = v1::AuctionHouseService::NewStub(auction_channel_);
 
     connected_ = true;
     spdlog::info("✅ All gRPC clients connected");
@@ -422,6 +428,196 @@ bool GrpcClients::RequestGUIDPool(
 
     spdlog::info("✅ Received GUID pool: {} ranges, {} total GUIDs",
                  out_ranges.size(), total_guids);
+    return true;
+}
+
+bool GrpcClients::AuctionSellItem(
+    uint32_t realm_id,
+    uint64_t player_guid,
+    uint32_t house_id,
+    uint32_t item_entry,
+    uint64_t item_guid,
+    uint32_t item_count,
+    uint32_t start_bid,
+    uint32_t buyout,
+    uint32_t expire_time_secs,
+    uint32_t deposit,
+    uint32_t& out_auction_id) {
+
+    if (!connected_ || !auction_stub_) {
+        spdlog::error("Auction client not connected");
+        return false;
+    }
+
+    v1::AuctionSellItemRequest request;
+    request.set_realmid(realm_id);
+    request.set_playerguid(player_guid);
+    request.set_houseid(house_id);
+    request.set_itementry(item_entry);
+    request.set_itemguid(item_guid);
+    request.set_itemcount(item_count);
+    request.set_startbid(start_bid);
+    request.set_buyout(buyout);
+    request.set_expiretimesecs(expire_time_secs);
+    request.set_deposit(deposit);
+
+    v1::AuctionSellItemResponse response;
+    grpc::ClientContext context;
+    context.set_deadline(Deadline(5));
+
+    grpc::Status status = auction_stub_->SellItem(&context, request, &response);
+
+    if (!status.ok()) {
+        spdlog::warn("AuctionSellItem RPC failed: {} - {}",
+                     status.error_code(), status.error_message());
+        return false;
+    }
+
+    // The service reports domain failures (not enough money for the deposit, a
+    // item that is no longer sellable) in the response rather than the status,
+    // so a non-zero error here is still an ok() RPC.
+    if (response.error() != v1::AH_OK) {
+        spdlog::debug("AuctionSellItem rejected for player {}: error {}",
+                      player_guid, static_cast<int>(response.error()));
+        return false;
+    }
+
+    out_auction_id = response.auctionid();
+    return true;
+}
+
+bool GrpcClients::AuctionListItems(
+    uint32_t realm_id,
+    uint64_t player_guid,
+    uint32_t house_id,
+    uint32_t list_from,
+    const std::string& searched_name,
+    uint32_t item_class,
+    uint32_t item_subclass,
+    uint32_t quality,
+    std::vector<AuctionListing>& out_listings,
+    uint32_t& out_total) {
+
+    if (!connected_ || !auction_stub_) {
+        spdlog::error("Auction client not connected");
+        return false;
+    }
+
+    v1::AuctionListItemsRequest request;
+    request.set_realmid(realm_id);
+    request.set_playerguid(player_guid);
+    request.set_houseid(house_id);
+    request.set_listfrom(list_from);
+    request.set_searchedname(searched_name);
+    request.set_itemclass(item_class);
+    request.set_itemsubclass(item_subclass);
+    request.set_quality(quality);
+
+    v1::AuctionListItemsResponse response;
+    grpc::ClientContext context;
+    context.set_deadline(Deadline(5));
+
+    grpc::Status status = auction_stub_->ListItems(&context, request, &response);
+
+    if (!status.ok()) {
+        spdlog::warn("AuctionListItems RPC failed: {} - {}",
+                     status.error_code(), status.error_message());
+        return false;
+    }
+
+    out_listings.clear();
+    for (const auto& item : response.items()) {
+        AuctionListing listing;
+        listing.auction_id = item.auctionid();
+        listing.item_entry = item.itementry();
+        listing.item_guid = item.itemguid();
+        listing.item_count = item.itemcount();
+        listing.owner_guid = item.ownerguid();
+        listing.start_bid = item.startbid();
+        listing.buyout = item.buyout();
+        listing.current_bid = item.bid();
+        listing.bidder_guid = item.bidderguid();
+        out_listings.push_back(listing);
+    }
+    out_total = response.totalcount();
+    return true;
+}
+
+bool GrpcClients::AuctionPlaceBid(
+    uint32_t realm_id,
+    uint64_t player_guid,
+    uint32_t house_id,
+    uint32_t auction_id,
+    uint32_t price) {
+
+    if (!connected_ || !auction_stub_) {
+        spdlog::error("Auction client not connected");
+        return false;
+    }
+
+    v1::AuctionPlaceBidRequest request;
+    request.set_realmid(realm_id);
+    request.set_playerguid(player_guid);
+    request.set_houseid(house_id);
+    request.set_auctionid(auction_id);
+    request.set_price(price);
+
+    v1::AuctionPlaceBidResponse response;
+    grpc::ClientContext context;
+    context.set_deadline(Deadline(5));
+
+    grpc::Status status = auction_stub_->PlaceBid(&context, request, &response);
+
+    if (!status.ok()) {
+        spdlog::warn("AuctionPlaceBid RPC failed: {} - {}",
+                     status.error_code(), status.error_message());
+        return false;
+    }
+
+    if (response.error() != v1::AH_OK) {
+        spdlog::debug("AuctionPlaceBid rejected for player {}: error {}",
+                      player_guid, static_cast<int>(response.error()));
+        return false;
+    }
+
+    return true;
+}
+
+bool GrpcClients::AuctionCancel(
+    uint32_t realm_id,
+    uint64_t player_guid,
+    uint32_t house_id,
+    uint32_t auction_id) {
+
+    if (!connected_ || !auction_stub_) {
+        spdlog::error("Auction client not connected");
+        return false;
+    }
+
+    v1::AuctionCancelRequest request;
+    request.set_realmid(realm_id);
+    request.set_playerguid(player_guid);
+    request.set_houseid(house_id);
+    request.set_auctionid(auction_id);
+
+    v1::AuctionCancelResponse response;
+    grpc::ClientContext context;
+    context.set_deadline(Deadline(5));
+
+    grpc::Status status = auction_stub_->CancelAuction(&context, request, &response);
+
+    if (!status.ok()) {
+        spdlog::warn("AuctionCancel RPC failed: {} - {}",
+                     status.error_code(), status.error_message());
+        return false;
+    }
+
+    if (response.error() != v1::AH_OK) {
+        spdlog::debug("AuctionCancel rejected for player {}: error {}",
+                      player_guid, static_cast<int>(response.error()));
+        return false;
+    }
+
     return true;
 }
 
