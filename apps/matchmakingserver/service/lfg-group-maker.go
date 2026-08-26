@@ -22,6 +22,22 @@ func NewGroupServiceMaker(client pbGroup.GroupServiceClient) *GroupServiceMaker 
 }
 
 func (m *GroupServiceMaker) CreateGroup(ctx context.Context, leader lfg.PlayerKey, leaderName string, members []lfg.Member) (uint64, error) {
+	// A match routinely mixes a premade party with players queued alone, so some
+	// members arrive already in a group and Invite answers AlreadyInGroup. That
+	// used to fail the whole formation, and the shard fell back to building a
+	// group of its own with a locally allocated id -- two groups for one party,
+	// each shard's anchor addressing a different one. Everyone leaves their
+	// current group first, the leader included, so the invite chain always
+	// starts from an empty roster.
+	if err := m.leaveCurrentGroup(ctx, leader.RealmID, leader.GUID); err != nil {
+		return 0, err
+	}
+	for _, member := range members {
+		if err := m.leaveCurrentGroup(ctx, member.RealmID, member.GUID); err != nil {
+			return 0, err
+		}
+	}
+
 	for _, member := range members {
 		invite, err := m.client.Invite(ctx, &pbGroup.InviteParams{
 			Api:         matchmaking.SupportedGroupServiceVer,
@@ -65,4 +81,31 @@ func (m *GroupServiceMaker) CreateGroup(ctx context.Context, leader lfg.PlayerKe
 		return 0, fmt.Errorf("lfg: group service reported no group for leader %d", leader.GUID)
 	}
 	return uint64(resp.GroupID), nil
+}
+
+// leaveCurrentGroup drops one player from whatever group they are in. A player
+// who is in none is left alone, so this costs a single lookup in the common
+// case of an all-solo match.
+func (m *GroupServiceMaker) leaveCurrentGroup(ctx context.Context, realmID uint32, guid uint64) error {
+	current, err := m.client.GetGroupIDByPlayer(ctx, &pbGroup.GetGroupIDByPlayerRequest{
+		Api:     matchmaking.SupportedGroupServiceVer,
+		RealmID: realmID,
+		Player:  guid,
+	})
+	if err != nil {
+		return fmt.Errorf("lfg: read group id for %d: %w", guid, err)
+	}
+	if current.GroupID == 0 {
+		return nil
+	}
+
+	if _, err = m.client.Leave(ctx, &pbGroup.GroupLeaveParams{
+		Api:     matchmaking.SupportedGroupServiceVer,
+		RealmID: realmID,
+		Player:  guid,
+	}); err != nil {
+		return fmt.Errorf("lfg: leave group %d for %d: %w", current.GroupID, guid, err)
+	}
+
+	return nil
 }
