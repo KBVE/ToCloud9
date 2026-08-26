@@ -283,6 +283,7 @@ set(PROTO_FILES
     "guid/guid.proto"
     "group/group.proto"
     "guilds/guilds.proto"
+    "auctionhouse/auctionhouse.proto"
 )
 
 set(PROTO_GENERATED_DIR "${CMAKE_BINARY_DIR}/generated")
@@ -507,6 +508,7 @@ install(FILES
     include/player-interactions-api.h
     include/battleground-api.h
     include/monitoring.h
+    include/kbve-auction-api.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
 
