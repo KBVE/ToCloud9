@@ -220,7 +220,13 @@ func TestJoinIsIdempotentByRequestID(t *testing.T) {
 	}
 }
 
-func TestQueueSurvivesAGroupServiceFailure(t *testing.T) {
+// A formation failure must release everyone it reserved. The shard abandons the
+// proposal and re-queues its players under a new request id, so entries kept
+// here can never be refreshed: they just hold those players in the queue index
+// and reject every later join with ErrPlayerAlreadyQueued. In production one
+// failure locked a player out of the dungeon finder until the process
+// restarted, the client popping a role check on each retry.
+func TestFormationFailureReleasesEveryReservedPlayer(t *testing.T) {
 	groups := &fakeGroupMaker{err: errors.New("group service unavailable")}
 	service := NewService("instance-1", nil, groups)
 
@@ -234,23 +240,53 @@ func TestQueueSurvivesAGroupServiceFailure(t *testing.T) {
 		t.Fatal("expected the group service error to surface")
 	}
 
-	// Everyone keeps their place, so the next attempt can still match them.
 	for _, entry := range entries {
-		if status := service.Status(entry.Leader); status.Status != StatusQueued {
-			t.Fatalf("%s should still be queued after the failure, got %v", entry.RequestID, status.Status)
+		if status := service.Status(entry.Leader); status.Status != StatusNone {
+			t.Fatalf("%s should be released after the failure, got %v", entry.RequestID, status.Status)
 		}
 	}
 
+	// The shard re-queues them, which it does under new request ids.
 	groups.err = nil
-	status, err := service.Join(context.Background(), solo("dps4", 6, RoleDamage, base().Add(5*time.Second), 285))
-	if err != nil {
-		t.Fatalf("retry join: %v", err)
+	requeued := fiveSolos(285)
+	for i, entry := range requeued {
+		entry.RequestID += "-retry"
+		status, err := service.Join(context.Background(), entry)
+		if err != nil {
+			t.Fatalf("requeue %s: %v", entry.RequestID, err)
+		}
+		if i == len(requeued)-1 && status.Status != StatusGrouped {
+			t.Fatalf("the requeued party should form a group, got %v", status.Status)
+		}
 	}
-	if status.Status != StatusQueued {
-		t.Fatalf("the sixth player should queue behind the reformed group, got %v", status.Status)
+	if groups.calls != 2 {
+		t.Fatalf("expected exactly one retry of the formation, got calls=%d", groups.calls)
+	}
+}
+
+// The players a failed formation released must be able to queue again with the
+// same request ids too -- a shard that restarts resets its proposal counter.
+func TestFormationFailureDoesNotStickToRequestIDs(t *testing.T) {
+	groups := &fakeGroupMaker{err: errors.New("group service unavailable")}
+	service := NewService("instance-1", nil, groups)
+
+	for _, entry := range fiveSolos(285)[:4] {
+		if _, err := service.Join(context.Background(), entry); err != nil {
+			t.Fatalf("join %s: %v", entry.RequestID, err)
+		}
+	}
+	if _, err := service.Join(context.Background(), fiveSolos(285)[4]); err == nil {
+		t.Fatal("expected the group service error to surface")
+	}
+
+	groups.err = nil
+	for _, entry := range fiveSolos(285) {
+		if _, err := service.Join(context.Background(), entry); err != nil {
+			t.Fatalf("rejoin %s: %v", entry.RequestID, err)
+		}
 	}
 	if groups.calls != 2 || groups.sizes[len(groups.sizes)-1] != 5 {
-		t.Fatalf("expected the original five to be matched on retry, got calls=%d sizes=%v", groups.calls, groups.sizes)
+		t.Fatalf("expected the five to reform, got calls=%d sizes=%v", groups.calls, groups.sizes)
 	}
 }
 
