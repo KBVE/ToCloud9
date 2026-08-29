@@ -138,11 +138,18 @@ func (s *Service) Join(ctx context.Context, entry *Entry) (PlayerStatus, error) 
 
 	groupID, err := s.createGroup(ctx, match)
 	if err != nil {
-		// Put them back rather than dropping them: a group service blip should
-		// cost a match, not the player's place in the queue.
+		// Drop the reservation entirely rather than putting the entries back.
+		// The caller reports the failure to the shard, which abandons the
+		// proposal and re-queues every player under a fresh request id, so a
+		// retained entry can never be refreshed -- it only holds those players
+		// in s.players and answers every later join with ErrPlayerAlreadyQueued.
+		// Seen in production: one formation failed on a stranded group_member
+		// row and the player could not enter a dungeon again for the lifetime
+		// of the process, the client popping a role check each time the shard
+		// retried.
 		s.mut.Lock()
 		for _, matched := range match.Entries {
-			s.restoreToQueue(matched)
+			delete(s.entries, matched.RequestID)
 		}
 		s.mut.Unlock()
 		return PlayerStatus{}, err
@@ -282,14 +289,6 @@ func (s *Service) removeFromQueue(entry *Entry) {
 			break
 		}
 	}
-}
-
-func (s *Service) restoreToQueue(entry *Entry) {
-	for _, member := range entry.Members {
-		s.players[member.PlayerKey] = entry
-	}
-	s.queues[entry.BattlegroupID] = append(s.queues[entry.BattlegroupID], entry)
-	s.sortQueue(entry.BattlegroupID)
 }
 
 func (s *Service) queuedAt(player PlayerKey) time.Time {
