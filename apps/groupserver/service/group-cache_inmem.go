@@ -164,6 +164,14 @@ func (g *groupsCacheInMem) RemoveMember(ctx context.Context, realmID uint32, mem
 		return err
 	}
 
+	// The row can exist in the database while the cache knows nothing about it
+	// -- a membership written outside the group service, or one that outlived
+	// its group. The delete above is still the point of the call, so a cache
+	// miss is not an error; it just leaves nothing to unlink here.
+	if group == nil {
+		return nil
+	}
+
 	g.cacheLock.Lock()
 	for i, member := range group.Members {
 		if member.MemberGUID == memberGUID {

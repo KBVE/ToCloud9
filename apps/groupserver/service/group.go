@@ -311,7 +311,47 @@ func (g groupServiceImpl) AcceptInvite(ctx context.Context, realmID uint32, play
 		return nil
 	}
 
+	if err = g.dropForeignMembership(ctx, realmID, player, group.ID); err != nil {
+		return err
+	}
+
 	return g.addMember(ctx, realmID, group, invite)
+}
+
+// dropForeignMembership clears a membership the invitee holds anywhere other
+// than keepGroupID. Invite already refuses a player the cache maps to a group,
+// so this only fires when the cache and the characters database disagree: a
+// membership row written outside the group service, or one stranded by a shard
+// that rolled while its party was alive. Without it the accept reaches
+// addMember and the insert dies on the group_member primary key --
+//
+//	Handled AcceptInvite error="Error 1062 (23000): Duplicate entry '517'
+//	for key 'group_member.PRIMARY'" player=517
+//
+// which fails the whole LFG formation for five players because one of them
+// carries a three-day-old row.
+//
+// The delete runs even when the cache reports no group at all, because that is
+// exactly the state the stranded row leaves behind; RemoveMember is a no-op
+// when there is genuinely nothing to remove. The other group is not locked
+// here: taking a second group lock under this one is the deadlock the lock
+// ordering in lockGroupOfPlayer exists to avoid, and a group the cache does not
+// know about has no lock to take.
+func (g groupServiceImpl) dropForeignMembership(ctx context.Context, realmID uint32, player uint64, keepGroupID uint) error {
+	currentGroupID, err := g.r.GroupIDByPlayer(ctx, realmID, player)
+	if err != nil {
+		return fmt.Errorf("can't get group of player, err: %w", err)
+	}
+
+	if currentGroupID == keepGroupID {
+		return nil
+	}
+
+	if err = g.r.RemoveMember(ctx, realmID, player); err != nil {
+		return fmt.Errorf("can't remove stale group member, err: %w", err)
+	}
+
+	return nil
 }
 
 func (g groupServiceImpl) Uninvite(ctx context.Context, realmID uint32, initiator, target uint64, reason string) error {

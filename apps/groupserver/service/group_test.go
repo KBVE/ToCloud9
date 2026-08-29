@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 
@@ -66,4 +67,76 @@ func TestGroupsServiceAcceptStaleInvite(t *testing.T) {
 	s := NewGroupsService(cache, nil, noopGroupProducer{})
 
 	assert.ErrorIs(t, s.AcceptInvite(context.Background(), 1, 2), ErrGroupNotFound)
+}
+
+// duplicateRowRepo models the characters database holding a group_member row
+// the cache never learned about: the insert fails on the primary key until the
+// row is deleted, exactly as MySQL does.
+type duplicateRowRepo struct {
+	noopGroupsRepo
+	strandedRow uint64
+	removed     bool
+}
+
+func (r *duplicateRowRepo) GetInviteByInvitedPlayer(ctx context.Context, realmID uint32, invitedPlayer uint64) (*repo.GroupInvite, error) {
+	return &repo.GroupInvite{Inviter: 1, InviterName: "Leader", Invitee: invitedPlayer, InviteeName: "Late", GroupID: 1}, nil
+}
+
+func (r *duplicateRowRepo) RemoveMember(ctx context.Context, realmID uint32, memberGUID uint64) error {
+	if memberGUID == r.strandedRow {
+		r.removed = true
+	}
+	return nil
+}
+
+func (r *duplicateRowRepo) AddMember(ctx context.Context, realmID uint32, groupMember *repo.GroupMember) error {
+	if groupMember.MemberGUID == r.strandedRow && !r.removed {
+		return errors.New("Error 1062 (23000): Duplicate entry '3' for key 'group_member.PRIMARY'")
+	}
+	return nil
+}
+
+// A membership row that outlived its group -- a shard rolled while the party
+// was alive, so nothing told the group service to clear it -- is invisible to
+// the cache, so Invite lets the accept through and addMember then dies on the
+// group_member primary key. That failure is not local to the one player: it
+// fails the LFG formation for the whole party, and the matchmaking queue never
+// forms a group again for anyone in it.
+func TestGroupsServiceAcceptInviteClearsStrandedMembership(t *testing.T) {
+	r := &duplicateRowRepo{strandedRow: 3}
+	cache := NewInMemGroupsCache(r)
+	ctx := context.Background()
+	assert.NoError(t, cache.Warmup(ctx, 1))
+	assert.NoError(t, cache.Create(ctx, 1, newTwoMembersGroup()))
+
+	s := NewGroupsService(cache, nil, noopGroupProducer{})
+
+	assert.NoError(t, s.AcceptInvite(ctx, 1, 3))
+	assert.True(t, r.removed, "stranded membership row should be deleted before the insert")
+
+	group, err := s.GroupByID(ctx, 1, 1)
+	assert.NoError(t, err)
+	assert.NotNil(t, group.MemberByGUID(3), "invitee should have joined the group")
+}
+
+// The same accept delivered twice must stay a no-op: the second one finds the
+// player already in the group and must not delete their own membership row on
+// the way through the stale-row path.
+func TestGroupsServiceAcceptInviteTwiceKeepsMembership(t *testing.T) {
+	r := &duplicateRowRepo{strandedRow: 3}
+	cache := NewInMemGroupsCache(r)
+	ctx := context.Background()
+	assert.NoError(t, cache.Warmup(ctx, 1))
+	assert.NoError(t, cache.Create(ctx, 1, newTwoMembersGroup()))
+
+	s := NewGroupsService(cache, nil, noopGroupProducer{})
+
+	assert.NoError(t, s.AcceptInvite(ctx, 1, 3))
+	r.removed = false
+	assert.NoError(t, s.AcceptInvite(ctx, 1, 3))
+	assert.False(t, r.removed, "a retried accept must not touch the membership it already created")
+
+	group, err := s.GroupByID(ctx, 1, 1)
+	assert.NoError(t, err)
+	assert.NotNil(t, group.MemberByGUID(3))
 }
